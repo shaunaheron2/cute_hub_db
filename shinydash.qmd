@@ -77,11 +77,19 @@ dbDisconnect(con)
 
 ```{r}
 
+library(shiny)
+library(shinydashboard)
+library(DBI)
+library(RSQLite)
+library(dplyr)
+library(stringr)
+library(DT)
+
 # Connect to SQLite
 con <- dbConnect(SQLite(), "client_visits.db")
 
 ui <- dashboardPage(
-  dashboardHeader(title = "Client Visit Tracker"),
+  dashboardHeader(title = "Hub Visit Tracker"),
   
   dashboardSidebar(
     sidebarMenu(
@@ -98,7 +106,8 @@ ui <- dashboardPage(
               textInput("name_search", "Search client (first or last name):"),
               actionButton("search", "Search"),
               hr(),
-              uiOutput("add_visit_ui")
+              uiOutput("add_visit_ui"),
+              uiOutput("view_visits_ui")
           ),
           box(width = 4, title = "Add New Client", status = "success",
               textInput("new_first", "First Name"),
@@ -110,6 +119,10 @@ ui <- dashboardPage(
         fluidRow(
           box(title = "Search Results", width = 12, solidHeader = TRUE, status = "primary",
               DT::dataTableOutput("client_results"))
+        ),
+        fluidRow(
+          box(title = "Visit History", width = 12, solidHeader = TRUE, status = "info",
+              DT::dataTableOutput("visit_history"))
         )
       ),
       tabItem(tabName = "clients_tab",
@@ -125,28 +138,32 @@ ui <- dashboardPage(
 server <- function(input, output, session) {
   
   search_results <- reactiveVal(data.frame())
+  visit_data <- reactiveVal(data.frame())
 
+  # Trigger search on enter or button
   observeEvent({
     input$search
     input$name_search
-    },{
-      req(input$name_search)
-      query <- str_trim(tolower(input$name_search))
-      if (query == "") return(NULL)
+  }, {
+    req(input$name_search)
+    query <- str_trim(tolower(input$name_search))
+    if (query == "") return(NULL)
 
     result <- dbGetQuery(con, "SELECT * FROM clients") %>%
       filter(
         str_detect(tolower(first_name), regex(query, ignore_case = TRUE)) |
         str_detect(tolower(last_name), regex(query, ignore_case = TRUE))
-      ) |>
-        mutate(dob = as.Date(dob, origin = "1970-01-01"),
-      entered_date = as.Date(entered_date, origin = "1970-01-01"))
+      ) %>%
+      mutate(
+        dob = as.Date(dob, origin = "1970-01-01"),
+        entered_date = as.Date(entered_date, origin = "1970-01-01")
+      )
 
-  search_results(result)
-  }, ignoreInit=TRUE)
+    search_results(result)
+  }, ignoreInit = TRUE)
 
   output$client_results <- DT::renderDataTable({
-  search_results()
+    search_results()
   })
 
   output$add_visit_ui <- renderUI({
@@ -156,24 +173,24 @@ server <- function(input, output, session) {
     tagList(
       selectInput("selected_client", "Select Client for Visit",
                   choices = setNames(results$client_id,
-                                     paste(
-                                      results$first_name, results$last_name, 
-                                     #results$dob
-                                     )
-                                     )),
+                                     paste(results$first_name, results$last_name))),
       actionButton("add_visit", "Add Visit (Today)")
     )
   })
 
+  output$view_visits_ui <- renderUI({
+    if (is.null(input$selected_client)) return(NULL)
+    actionButton("view_visits", "View Visit History")
+  })
+
   output$all_clients <- DT::renderDataTable({
-    dbGetQuery(con, "SELECT * FROM clients") |>
+    dbGetQuery(con, "SELECT * FROM clients") %>%
       mutate(
         dob = as.Date(dob),
         entered_date = as.Date(entered_date)
-      ) |>
-      DT::datatable()
+      ) %>%
+      datatable()
   })
-
 
   observeEvent(input$add_visit, {
     req(input$selected_client)
@@ -184,6 +201,21 @@ server <- function(input, output, session) {
     showNotification("Visit added!", type = "message")
   })
 
+  observeEvent(input$view_visits, {
+    req(input$selected_client)
+    visits <- dbGetQuery(con, "
+      SELECT visit_date FROM visits WHERE client_id = ?
+      ORDER BY visit_date DESC
+    ", params = list(input$selected_client))
+    visit_data(visits)
+  })
+
+  output$visit_history <- DT::renderDataTable({
+    v <- visit_data()
+    if (nrow(v) == 0) return(data.frame(Message = "No visits found"))
+    v %>% mutate(visit_date = as.Date(visit_date))
+  })
+
   observeEvent(input$add_client, {
     req(input$new_first, input$new_last, input$new_dob)
     dbExecute(con, "
@@ -191,7 +223,7 @@ server <- function(input, output, session) {
       VALUES (?, ?, ?)
     ", params = list(input$new_first, input$new_last, input$new_dob))
     showNotification("Client added!", type = "message")
-    search_results(data.frame())  # Clear previous search
+    search_results(data.frame())  # Clear search after adding
   })
 
   session$onSessionEnded(function() {
@@ -200,5 +232,6 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui, server)
+
 
 ```
