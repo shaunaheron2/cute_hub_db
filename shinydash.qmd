@@ -1,0 +1,204 @@
+
+
+```{r}
+library(shinydashboard)
+library(shiny)
+library(readxl)
+library(readr)
+library(RSQLite)
+library(DT)
+library(DBI)
+library(tidyverse)
+library(janitor)
+```
+
+```{r}
+# Create or connect to a new SQLite DB file
+con <- dbConnect(SQLite(), dbname = "client_visits.db")
+```
+```{r}
+
+
+
+# Drop tables if they already exist (for re-runs)
+dbExecute(con, "DROP TABLE IF EXISTS visits")
+dbExecute(con, "DROP TABLE IF EXISTS clients")
+
+# Create `clients` table
+dbExecute(con, "
+  CREATE TABLE clients (
+    client_id INTEGER PRIMARY KEY,
+    first_name TEXT NOT NULL,
+    last_name TEXT NOT NULL,
+    dob DATE NOT NULL,
+    entered_date DATE DEFAULT CURRENT_DATE
+  )
+")
+
+# Create `visits` table
+dbExecute(con, "
+  CREATE TABLE visits (
+    visit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id INTEGER NOT NULL,
+    visit_date DATE NOT NULL,
+    FOREIGN KEY(client_id) REFERENCES clients(client_id)
+  )
+")
+
+# Close connection
+dbDisconnect(con)
+
+
+
+```
+```{r}
+con <- dbConnect(SQLite(), "client_visits.db")
+clients <- data.frame(
+  first_name = c("Alice", "Bob", "Carol", "David", "Eve", "Alicia"),
+  last_name = c("Smith", "Johnson", "Brown", "Wilson", "Davis", "Smythe"),
+  dob = as.Date(c("1990-05-01", "1985-07-12", "2000-01-30", "1978-03-14", "1992-09-09", "1991-11-11"))
+)
+
+# Insert sample data
+for (i in seq_len(nrow(clients))) {
+  dbExecute(con, "
+    INSERT INTO clients (first_name, last_name, dob)
+    VALUES (?, ?, ?)
+  ", params = list(clients$first_name[i], clients$last_name[i], clients$dob[i]))
+}
+
+# Confirm
+print(dbReadTable(con, "clients"))
+
+# Disconnect
+dbDisconnect(con)
+```
+
+
+```{r}
+
+# Connect to SQLite
+con <- dbConnect(SQLite(), "client_visits.db")
+
+ui <- dashboardPage(
+  dashboardHeader(title = "Client Visit Tracker"),
+  
+  dashboardSidebar(
+    sidebarMenu(
+      menuItem("Search/Add Visits", tabName = "visit_tab", icon = icon("user-plus")),
+      menuItem("View Clients", tabName = "clients_tab", icon = icon("table"))
+    )
+  ),
+  
+  dashboardBody(
+    tabItems(
+      tabItem(tabName = "visit_tab",
+        fluidRow(
+          box(width = 4, title = "Search Client", status = "warning",
+              textInput("name_search", "Search client (first or last name):"),
+              actionButton("search", "Search"),
+              hr(),
+              uiOutput("add_visit_ui")
+          ),
+          box(width = 4, title = "Add New Client", status = "success",
+              textInput("new_first", "First Name"),
+              textInput("new_last", "Last Name"),
+              dateInput("new_dob", "Date of Birth"),
+              actionButton("add_client", "Add Client")
+          )
+        ),
+        fluidRow(
+          box(title = "Search Results", width = 12, solidHeader = TRUE, status = "primary",
+              DT::dataTableOutput("client_results"))
+        )
+      ),
+      tabItem(tabName = "clients_tab",
+        fluidRow(
+          box(title = "All Clients", width = 12, solidHeader = TRUE, status = "info",
+              DT::dataTableOutput("all_clients"))
+        )
+      )
+    )
+  )
+)
+
+server <- function(input, output, session) {
+  
+  search_results <- reactiveVal(data.frame())
+
+  observeEvent({
+    input$search
+    input$name_search
+    },{
+      req(input$name_search)
+      query <- str_trim(tolower(input$name_search))
+      if (query == "") return(NULL)
+
+    result <- dbGetQuery(con, "SELECT * FROM clients") %>%
+      filter(
+        str_detect(tolower(first_name), regex(query, ignore_case = TRUE)) |
+        str_detect(tolower(last_name), regex(query, ignore_case = TRUE))
+      ) |>
+        mutate(dob = as.Date(dob, origin = "1970-01-01"),
+      entered_date = as.Date(entered_date, origin = "1970-01-01"))
+
+  search_results(result)
+  }, ignoreInit=TRUE)
+
+  output$client_results <- DT::renderDataTable({
+  search_results()
+  })
+
+  output$add_visit_ui <- renderUI({
+    results <- search_results()
+    if (nrow(results) == 0) return(NULL)
+
+    tagList(
+      selectInput("selected_client", "Select Client for Visit",
+                  choices = setNames(results$client_id,
+                                     paste(
+                                      results$first_name, results$last_name, 
+                                     #results$dob
+                                     )
+                                     )),
+      actionButton("add_visit", "Add Visit (Today)")
+    )
+  })
+
+  output$all_clients <- DT::renderDataTable({
+    dbGetQuery(con, "SELECT * FROM clients") |>
+      mutate(
+        dob = as.Date(dob),
+        entered_date = as.Date(entered_date)
+      ) |>
+      DT::datatable()
+  })
+
+
+  observeEvent(input$add_visit, {
+    req(input$selected_client)
+    dbExecute(con, "
+      INSERT INTO visits (client_id, visit_date)
+      VALUES (?, ?)
+    ", params = list(input$selected_client, Sys.Date()))
+    showNotification("Visit added!", type = "message")
+  })
+
+  observeEvent(input$add_client, {
+    req(input$new_first, input$new_last, input$new_dob)
+    dbExecute(con, "
+      INSERT INTO clients (first_name, last_name, dob)
+      VALUES (?, ?, ?)
+    ", params = list(input$new_first, input$new_last, input$new_dob))
+    showNotification("Client added!", type = "message")
+    search_results(data.frame())  # Clear previous search
+  })
+
+  session$onSessionEnded(function() {
+    dbDisconnect(con)
+  })
+}
+
+shinyApp(ui, server)
+
+```
