@@ -104,7 +104,9 @@ ui <- dashboardPage(
         dashboardSidebar(
           sidebarMenu(
             menuItem("Search/Add Visits", tabName = "visit_tab", icon = icon("user-plus")),
-            menuItem("View Clients", tabName = "clients_tab", icon = icon("table"))
+            menuItem("View Clients", tabName = "clients_tab", icon = icon("table")),
+            menuItem("View Visits", tabName = "visitlist_tab",
+            icon = icon('table'))
           )
         ),
   
@@ -122,7 +124,7 @@ ui <- dashboardPage(
                 box(width = 4, title = "Add New Client", status = "success",
                     textInput("new_first", "First Name"),
                     textInput("new_last", "Last Name"),
-                    dateInput("new_dob", "Date of Birth"),
+                    dateInput("new_dob", "Date of Birth", value = as.Date('2009-01-01'), min = '1994-01-01', max = "2023-01-01"),
                     actionButton("add_client", "Add Client")
                 )
               ),
@@ -140,6 +142,13 @@ ui <- dashboardPage(
                 box(title = "All Clients", width = 12, solidHeader = TRUE, status = "info",
                     DT::dataTableOutput("all_clients"))
               )
+            ),
+            tabItem(tabName = 'visitlist_tab',
+            fluidRow(
+              box(title = "All Visits", width =12,
+              solidHeader = TRUE, status = 'info',
+                DT::dataTableOutput('all_visits'))
+            )
             )
           )
         )
@@ -198,18 +207,42 @@ ui <- dashboardPage(
               dob = as.Date(dob),
               entered_date = as.Date(entered_date)
             ) %>%
-            datatable()
+            datatable(
+              rownames = FALSE,) 
+                
+        })
+
+        output$all_visits <- DT::renderDataTable({
+          dbGetQuery(con, "
+            SELECT v.visit_id, v.client_id, c.first_name, c.last_name, v.visit_date
+            FROM visits v
+            LEFT JOIN clients c ON v.client_id = c.client_id
+            ORDER BY v.visit_date DESC
+          ") %>%
+            mutate(visit_date = as.Date(visit_date, origin = "1970-01-01")) |>
+            datatable(rownames = FALSE)
         })
 
       ## need to add conditional that we only add the visit if there isn't
       ## already a visit added for that day; if so returns "Visit already added"
         observeEvent(input$add_visit, {
           req(input$selected_client)
-          dbExecute(con, "
-            INSERT INTO visits (client_id, visit_date)
-            VALUES (?, ?)
-          ", params = list(input$selected_client, Sys.Date()))
-          showNotification("Visit added!", type = "message")
+          # Check if visit already exists for today
+          existing <- dbGetQuery(con, "
+            SELECT 1 FROM visits
+            WHERE client_id = ? AND visit_date = ?
+            LIMIT 1
+          ", params = list(input$selected_client, as.character(Sys.Date())))
+
+          if (nrow(existing) == 0) {
+            dbExecute(con, "
+              INSERT INTO visits (client_id, visit_date)
+              VALUES (?, ?)
+            ", params = list(input$selected_client, as.character(Sys.Date())))
+            showNotification("Visit added!", type = "message")
+          } else {
+            showNotification("Visit already recorded for today.", type = "warning")
+          }
         })
 
         observeEvent(input$view_visits, {
