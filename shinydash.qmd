@@ -219,7 +219,8 @@ ui <- dashboardPage(
             LEFT JOIN clients c ON v.client_id = c.client_id
             ORDER BY v.visit_date DESC
           ") %>%
-            mutate(visit_date = as.Date(visit_date, origin = "1970-01-01")) |>
+            mutate(
+              visit_date = as.Date(visit_date, origin = "1970-01-01")) |>
             datatable(rownames = FALSE)
         })
 
