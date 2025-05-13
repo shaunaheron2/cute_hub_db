@@ -208,7 +208,11 @@ ui <- dashboardPage(
               entered_date = as.Date(entered_date)
             ) %>%
             datatable(
-              rownames = FALSE,) 
+            rownames = FALSE,
+              options = list(columnDefs = 
+                           list(list(className = 'dt-center', 
+                                     targets = "_all"))))
+              
                 
         })
 
@@ -221,7 +225,11 @@ ui <- dashboardPage(
           ") %>%
             mutate(
               visit_date = as.Date(visit_date, origin = "1970-01-01")) |>
-            datatable(rownames = FALSE)
+            datatable(
+            rownames = FALSE,
+              options = list(columnDefs = 
+                           list(list(className = 'dt-center', 
+                                     targets = "_all"))))
         })
 
       ## need to add conditional that we only add the visit if there isn't
